@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>バスロケーション＆時刻表</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.1/mqttws31.min.js"></script>
+    <style>
+        html, body { height: 100%; margin: 0; font-family: Arial, sans-serif; }
+        #map { height: 50vh; margin-bottom: 20px; }
+        table { width: 100%; border-collapse: collapse; background-color: #f9f9f9; }
+        th, td { border: 1px solid #ddd; padding: 12px; text-align: center; }
+        th { background-color: #3584bb; color: white; }
+        .active { color: green; font-weight: bold; }
+        .inactive { color: red; font-weight: bold; }
+        .search-container { margin-bottom: 20px; }
+        select, input, button { padding: 8px; margin-right: 10px; }
+    </style>
+</head>
+<body onload="init()">
+    <h2>バスロケーション</h2>
+    <div id="map"></div>
+    
+    <h2>バス時刻表（24時間以内）</h2>
+    <div class="search-container">
+        <label for="from">出発地:</label>
+        <select id="from">
+            <option value="">すべて</option>
+            <option value="秋田キャンパス">秋田キャンパス</option>
+            <option value="大潟キャンパス">大潟キャンパス</option>
+        </select>
+
+        <label for="to">目的地:</label>
+        <select id="to">
+            <option value="">すべて</option>
+            <option value="秋田キャンパス">秋田キャンパス</option>
+            <option value="大潟キャンパス">大潟キャンパス</option>
+        </select>
+        
+        <label for="departure-time">出発時間:</label>
+        <input type="time" id="departure-time">
+        
+        <button onclick="updateTable()">検索</button>
+    </div>
+    
+    <table id="busTable">
+        <thead>
+            <tr>
+                <th>出発時間</th>
+                <th>出発地</th>
+                <th>行き先</th>
+                <th>バス番号</th>
+                <th>運行状況</th>
+                <th>温度</th>
+                <th>湿度</th>
+                <th>状態</th>
+            </tr>
+        </thead>
+        <tbody></tbody>
+    </table>
+
+    <script>
+        const mqtt_topic = 'akita-pu/gpstest';
+        const mqtt_url = 'wss://broker.emqx.io:8084/mqtt';
+        const mqtt_client = new Paho.MQTT.Client(mqtt_url, "web-client-" + Math.random().toString(16).substr(2, 8));
+        const deviceStatus = {};
+        const STATUS_TIMEOUT = 30000;
+        let map, markers = {};
+
+        function init() {
+            map = L.map('map').setView([39.876599, 140.015534], 11);
+            L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+            mqtt_client.onMessageArrived = onMessage;
+            mqtt_client.connect({
+                onSuccess: () => mqtt_client.subscribe(mqtt_topic),
+                onFailure: (error) => console.error("MQTT接続失敗", error)
+            });
+        }
+
+        function onMessage(message) {
+            console.log("受信:", message.payloadString);
+            try {
+                const data = JSON.parse(message.payloadString);
+                const { id, lat, lng, temp, hum } = data;
+                if (markers[id]) markers[id].removeFrom(map);
+                markers[id] = L.circleMarker([lat, lng], { color: "blue", fillColor: "cyan", radius: 5 }).addTo(map);
+                markers[id].bindPopup(`${id}号車 (${temp.toFixed(1)}℃, ${hum.toFixed()}%)`).openPopup();
+                updateTable(id, temp, hum);
+            } catch (error) {
+                console.error("JSONパースエラー", error);
+            }
+        }
+
+        function updateTable(id, temp, hum) {
+            const now = Date.now();
+            deviceStatus[id] = { temp, hum, timestamp: now, status: "稼働中" };
+            const tbody = document.querySelector("#busTable tbody");
+            tbody.innerHTML = Object.keys(deviceStatus).map(device_id => {
+                const device = deviceStatus[device_id];
+                if (now - device.timestamp > STATUS_TIMEOUT) device.status = "停止中";
+                return `<tr><td>${new Date().toLocaleTimeString()}</td><td>秋田キャンパス</td><td>大潟キャンパス</td><td>${device_id}</td><td>運行中</td><td>${device.temp}</td><td>${device.hum}</td><td class="${device.status === '稼働中' ? 'active' : 'inactive'}">${device.status}</td></tr>`;
+            }).join("");
+        }
+    </script>
+</body>
+</html>
+
